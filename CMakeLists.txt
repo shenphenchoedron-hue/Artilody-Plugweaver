@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ArtilodyPlugweaver VERSION 0.3.1 LANGUAGES C CXX)
+project(ArtilodyPlugweaver VERSION 0.3.2 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # No runtime files next to the app or the plugins: the MSVC runtime is linked

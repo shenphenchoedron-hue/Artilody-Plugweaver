@@ -934,9 +934,35 @@ class Main final : public AudioAppComponent,
       error(e.what());
       return;
     }
-    buildLog.clear();
+    // Always ask where the plugins go, starting in the folder used last.
     tab = 3;
     refresh(false);
+    message("Choose the folder to install the plugins in");
+    chooser = std::make_unique<FileChooser>(
+        "Choose the folder to install the plugins in (VST3, Components and "
+        "CLAP subfolders are used)",
+        pluginFolder, "");
+    Component::SafePointer<Main> safe(this);
+    chooser->launchAsync(
+        FileBrowserComponent::openMode |
+            FileBrowserComponent::canSelectDirectories,
+        [safe](const FileChooser &fc) {
+          if (!safe)
+            return;
+          auto folder = fc.getResult();
+          if (folder == File{}) {
+            safe->message("Build cancelled - no folder chosen");
+            return;
+          }
+          safe->setPluginFolder(folder);
+          safe->startBuild();
+        });
+  }
+  void startBuild() {
+    auto snapshot = document;
+    bool v = vst3.getToggleState(), a = au.getToggleState(),
+         c = clap.getToggleState();
+    buildLog.clear();
     message("Building plugin...");
     auto root = pluginFolder;
     run([this, snapshot, v, a, c, root] {
