@@ -118,7 +118,8 @@ Build-Linux.sh i instrumentmappen) i brugerens egne pluginmapper:
 - Windows: `%LOCALAPPDATA%\Programs\Common\VST3\` og `...\CLAP\`
 - Linux: `~/.vst3/` og `~/.clap/`
 
-Scanner dit musikprogram ikke disse mapper, så tilføj dem i programmets pluginindstillinger.
+På Windows kræver **Build plugin** også [Git](https://git-scm.com/download/win), som bruges
+til at hente CLAP-delen. Scanner dit musikprogram ikke disse mapper, så tilføj dem i programmets pluginindstillinger.
 
 **Export source project** opretter samme selvstændige kildeprojekt uden at bygge det.
 Det indeholder `instrument.zip`, C++-koden, CMake, licenser, buildfiler til Mac, Windows og

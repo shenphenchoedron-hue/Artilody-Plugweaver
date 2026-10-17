@@ -8,6 +8,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+where git >nul 2>nul
+if errorlevel 1 (
+  echo Git mangler. Installer Git fra https://git-scm.com/download/win
+  echo - det bruges til at hente CLAP-delen af buildet.
+  pause
+  exit /b 1
+)
 echo Bygger instrumentet - VST3 og/eller CLAP.
 cmake -S . -B build-windows -A x64 || goto failed
 cmake --build build-windows --config Release --parallel || goto failed

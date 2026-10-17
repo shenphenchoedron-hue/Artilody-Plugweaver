@@ -27,7 +27,8 @@ On Windows and Linux the build scripts and the Build plugin button install into 
 - Windows: `%LOCALAPPDATA%\Programs\Common\VST3\` and `...\CLAP\`
 - Linux: `~/.vst3/` and `~/.clap/`
 
-Windows needs Visual Studio 2022 (Build Tools, "Desktop development with C++") and CMake 3.24+.
+Windows needs Visual Studio 2022 (Build Tools, "Desktop development with C++"), CMake 3.24+
+and Git (used to download the CLAP extension).
 Linux needs GCC/Clang, CMake 3.24+ and the ALSA, JACK, X11, FreeType and OpenGL development
 packages listed in Build-Linux.sh.
 

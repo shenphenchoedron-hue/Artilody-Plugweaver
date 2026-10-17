@@ -75,7 +75,7 @@ inline File findCMake() {
 #endif
   for (auto &dir : StringArray::fromTokens(
            SystemStats::getEnvironmentVariable("PATH", {}), separator, "\""))
-    if (dir.isNotEmpty())
+    if (File::isAbsolutePath(dir))
       candidates.add(File(dir).getChildFile(exe).getFullPathName());
   for (auto &path : candidates)
     if (File(path).existsAsFile())

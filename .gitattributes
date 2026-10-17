@@ -1,0 +1,8 @@
+* text=auto
+# Batch files need CRLF for reliable goto/labels in cmd.exe; shell scripts need LF.
+# These files are also embedded in the app's instrument template, so a checkout
+# on any platform must keep them unchanged.
+*.bat text eol=crlf
+*.sh text eol=lf
+*.command text eol=lf
+*.png binary
