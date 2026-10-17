@@ -1,4 +1,4 @@
-# Artilody Plugweaver — 0.3
+# Artilody Plugweaver — 0.3.1
 
 C++20 / JUCE 7.0.12, GPLv3. Blå/orange instrumentbygger med SFZ-import, aflytning,
 fri layoutdesigner, delbare templates og færdige VST3-, AU- og CLAP-instrumenter.
@@ -109,7 +109,13 @@ musikprogrammer kigger i, og som kan ses i Finder/Stifinder:
 | Windows | `C:\Program Files\Common Files\VST3\` | – | `C:\Program Files\Common Files\CLAP\` |
 | Linux | `~/.vst3/` | – | `~/.clap/` |
 
-På Mac er det **Macintosh HD → Bibliotek → Audio → Plug-Ins** (ikke den skjulte Bibliotek-mappe
+Øverst i Export-fanen står **Install plugins in:** med den mappe, plugins lægges i. Med
+**Choose folder…** vælger du selv mappen (valget huskes), og **Use standard** går tilbage til
+standardmappen. Plugins lægges i mappens undermapper `VST3`, `Components` (AU) og `CLAP`,
+og den fulde sti til hver fil står lige nedenunder. Vælger du en anden mappe end
+standardmappen, skal den tilføjes i musikprogrammets pluginindstillinger.
+
+På Mac er standardmappen **Macintosh HD → Bibliotek → Audio → Plug-Ins** (ikke den skjulte Bibliotek-mappe
 i din brugermappe). Mapperne tilhører systemet, så macOS beder om din adgangskode, og
 Windows viser sin normale tilladelsesdialog, når et plugin installeres. Ældre kopier af
 samme instrument i de skjulte brugermapper (fra Plugweaver 0.3.0) fjernes automatisk,

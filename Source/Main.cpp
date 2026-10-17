@@ -107,6 +107,11 @@ class Main final : public AudioAppComponent,
   // One "Show" button per row of the Export card: opens Finder/Explorer at the
   // file itself.
   TextButton showFile[4];
+  // Folder the user chose for plugins (remembered). Plugins go into its VST3,
+  // Components (AU) and CLAP subfolders, like the standard plugin folders.
+  File pluginFolder = pw::pluginInstallRoot();
+  TextButton choosePluginFolder{"Choose folder..."},
+      standardPluginFolder{"Use standard"};
   TextEditor buildLog;
   // Plugin settings
   TextEditor instrumentName, maker;
@@ -500,8 +505,7 @@ class Main final : public AudioAppComponent,
     static const char *formats[] = {"vst3", "au", "clap"};
     if (index == 3)
       return pw::pluginCopyFolder(document);
-    return pw::pluginInstallRoot()
-        .getChildFile(pw::pluginFolderName(formats[index]))
+    return pluginFolder.getChildFile(pw::pluginFolderName(formats[index]))
         .getChildFile(document.name + pw::pluginExtension(formats[index]));
   }
   void updateInstallStatus() {
@@ -518,6 +522,23 @@ class Main final : public AudioAppComponent,
               : String("Not built yet");
       showFile[i].setEnabled(installed[i]);
     }
+  }
+  void setPluginFolder(File folder) {
+    // Choosing a format folder itself (e.g. .../Plug-Ins/VST3) means its
+    // parent, so plugins never end up in VST3/VST3.
+    for (auto format : {"vst3", "au", "clap"})
+      if (folder.getFileName().equalsIgnoreCase(pw::pluginFolderName(format)))
+        folder = folder.getParentDirectory();
+    pluginFolder = folder;
+    settings.getUserSettings()->setValue(
+        "pluginFolder", folder == pw::pluginInstallRoot()
+                            ? String()
+                            : folder.getFullPathName());
+    settings.saveIfNeeded();
+    updateInstallStatus();
+    resized();
+    repaint();
+    message("Plugins will be installed in " + folder.getFullPathName());
   }
   void appendLog(const String &text) {
     Component::SafePointer<Main> safe(this);
@@ -917,7 +938,8 @@ class Main final : public AudioAppComponent,
     tab = 3;
     refresh(false);
     message("Building plugin...");
-    run([this, snapshot, v, a, c] {
+    auto root = pluginFolder;
+    run([this, snapshot, v, a, c, root] {
       auto log = [this](const String &line) { appendLog(line); };
       auto engineArchive = pw::openEngineArchive();
       pw::require(engineArchive != nullptr,
@@ -932,7 +954,7 @@ class Main final : public AudioAppComponent,
       try {
         auto built =
             pw::createPlugins(snapshot, v, a, c, *engineArchive, stage, log);
-        installedFiles = pw::installPlugins(built, log);
+        installedFiles = pw::installPlugins(built, log, root);
         copyFolder = pw::savePluginCopies(snapshot, built, log);
       } catch (...) {
         stage.deleteRecursively();
@@ -1032,6 +1054,11 @@ public:
       o.osxLibrarySubFolder = "Application Support";
       return o;
     }());
+    {
+      auto saved = settings.getUserSettings()->getValue("pluginFolder");
+      if (saved.isNotEmpty() && File::isAbsolutePath(saved))
+        pluginFolder = File(saved);
+    }
     setLookAndFeel(&look);
     LookAndFeel::setDefaultLookAndFeel(&look);
     // Header
@@ -1109,6 +1136,28 @@ public:
           installedFile(i).revealToUser();
       };
     }
+    manage(choosePluginFolder);
+    style(choosePluginFolder, "", "folder");
+    manage(standardPluginFolder);
+    style(standardPluginFolder, "", "");
+    standardPluginFolder.setTooltip(pw::pluginInstallRoot().getFullPathName());
+    choosePluginFolder.onClick = [this] {
+      if (busy)
+        return;
+      chooser = std::make_unique<FileChooser>(
+          "Choose the folder for your plugins", pluginFolder, "");
+      Component::SafePointer<Main> safe(this);
+      chooser->launchAsync(FileBrowserComponent::openMode |
+                               FileBrowserComponent::canSelectDirectories,
+                           [safe](const FileChooser &fc) {
+                             auto f = fc.getResult();
+                             if (safe && f != File{})
+                               safe->setPluginFolder(f);
+                           });
+    };
+    standardPluginFolder.onClick = [this] {
+      setPluginFolder(pw::pluginInstallRoot());
+    };
     manage(buildLog);
     buildLog.setMultiLine(true);
     buildLog.setJustification(Justification::topLeft);
@@ -1681,6 +1730,19 @@ public:
     auto r = exportInfo.reduced(24, 18);
     drawTitle(g, "Formats and installation", r.removeFromTop(28), "cube", 18);
     r.removeFromTop(8);
+    {
+      auto folderRow = r.removeFromTop(32);
+      folderRow.removeFromRight(296); // folder buttons
+      g.setFont(sans(15.f, true));
+      g.setColour(col::text);
+      g.drawText("Install plugins in:", folderRow.removeFromLeft(150),
+                 Justification::centredLeft);
+      g.setFont(sans(15.f));
+      g.setColour(col::accent);
+      g.drawFittedText(pluginFolder.getFullPathName(), folderRow,
+                       Justification::centredLeft, 1);
+      r.removeFromTop(8);
+    }
     struct Row {
       ToggleButton *t;
       String label, format;
@@ -1722,8 +1784,12 @@ public:
     g.setColour(col::muted);
     g.setFont(sans(14.f));
     g.drawFittedText(
-        "Plugins are installed in the standard plugin folders of this "
-        "computer, for all users. After building: quit and reopen your music program and rescan "
+        (pluginFolder == pw::pluginInstallRoot()
+             ? String("This is the standard plugin folder, where music "
+                      "programs look. ")
+             : String("Music programs only look in the standard folder (Use "
+                      "standard) - add this folder in their plugin settings. ")) +
+        "After building: quit and reopen your music program and rescan "
         "plugins. Find it among instruments (" +
             (document.maker.isNotEmpty() ? document.maker : String("maker")) +
             "), not effects. Plugin code " + infoCode + ".",
@@ -1916,13 +1982,19 @@ public:
     headerCard = in.removeFromTop(jlimit(84, 120, body.getHeight() / 5));
     in.removeFromTop(8);
     if (tab == 3) {
-      auto card = in.removeFromTop(252);
+      auto card = in.removeFromTop(292);
       panels.push_back({card, "", ""});
       exportInfo = card;
       {
         // Same row geometry as paintExportInfo().
         auto rowsArea = card.reduced(24, 18);
         rowsArea.removeFromTop(36);
+        auto folderRow = rowsArea.removeFromTop(32);
+        place(standardPluginFolder, folderRow.removeFromRight(120).reduced(0, 2));
+        folderRow.removeFromRight(8);
+        place(choosePluginFolder, folderRow.removeFromRight(160).reduced(0, 2));
+        standardPluginFolder.setEnabled(pluginFolder != pw::pluginInstallRoot());
+        rowsArea.removeFromTop(8);
         for (auto &b : showFile) {
           auto line = rowsArea.removeFromTop(26);
           place(b, line.removeFromRight(84).reduced(0, 1));
