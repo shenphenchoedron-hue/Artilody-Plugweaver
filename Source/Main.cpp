@@ -105,7 +105,7 @@ class Main final : public AudioAppComponent,
   TextButton exportBuild{"Build plugin"}, exportSource{"Export source project"},
       openPlugins{"Show installed files"};
   // One "Show" button per row of the Export card: opens Finder/Explorer at the
-  // file itself, also inside folders Finder hides (Library on macOS).
+  // file itself.
   TextButton showFile[4];
   TextEditor buildLog;
   // Plugin settings
@@ -962,17 +962,14 @@ class Main final : public AudioAppComponent,
 #endif
       return path;
     };
-    String text = "The plugin files were created and installed where music "
-                  "programs look for them:\n\n";
+    String text = "The plugin files were created and installed in the "
+                  "standard plugin folders, where music programs look for "
+                  "them:\n\n";
     for (auto &f : files) {
       auto ext = f.getFileExtension().substring(1);
       text << (ext == "component" ? String("AU") : ext.toUpperCase()) << ":  "
            << shortPath(f.getFullPathName()) << "\n";
     }
-#if JUCE_MAC
-    text << "\n~ is your home folder. Library (Bibliotek) is hidden in Finder, "
-            "so use the button below to see the files.";
-#endif
     text << "\n\nA copy you can always see and pass on:\n"
          << shortPath(copyFolder.getFullPathName())
          << "\n\nQuit and reopen your music program, then rescan plugins.";
@@ -1725,11 +1722,8 @@ public:
     g.setColour(col::muted);
     g.setFont(sans(14.f));
     g.drawFittedText(
-#if JUCE_MAC
-        "The plugin folders are inside Library (Bibliotek), which Finder "
-        "hides: click Show to open the folder with the file selected. "
-#endif
-        "After building: quit and reopen your music program and rescan "
+        "Plugins are installed in the standard plugin folders of this "
+        "computer, for all users. After building: quit and reopen your music program and rescan "
         "plugins. Find it among instruments (" +
             (document.maker.isNotEmpty() ? document.maker : String("maker")) +
             "), not effects. Plugin code " + infoCode + ".",

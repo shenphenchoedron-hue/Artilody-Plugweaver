@@ -27,13 +27,27 @@ inline String pluginVersion(Time when = Time::getCurrentTime()) {
   return String(1 + minutes / 65536) + "." + String((minutes / 256) % 256) +
          "." + String(minutes % 256);
 }
-// Per-user plugin folders that hosts scan by default, so installing never
-// needs administrator rights:
-//   macOS:   ~/Library/Audio/Plug-Ins/{VST3,Components,CLAP}
-//   Windows: %LOCALAPPDATA%\Programs\Common\{VST3,CLAP}
-//   Linux:   ~/.vst3, ~/.clap
-// The folder names match the install rules in EngineTemplate/CMakeLists.txt.
+// Standard plugin folders, where music programs look and where users expect
+// to find plugins (the per-user folders are hidden on macOS and Windows):
+//   macOS:   /Library/Audio/Plug-Ins/{VST3,Components,CLAP}
+//   Windows: C:\Program Files\Common Files\{VST3,CLAP}
+//   Linux:   ~/.vst3, ~/.clap (the usual user folders on Linux)
+// Writing to the macOS and Windows folders needs administrator approval, which
+// installPlugins() asks for with the system's own password/UAC dialog.
 inline File pluginInstallRoot() {
+#if JUCE_MAC
+  return File("/Library/Audio/Plug-Ins");
+#elif JUCE_WINDOWS
+  return File(SystemStats::getEnvironmentVariable(
+      "CommonProgramFiles", "C:\\Program Files\\Common Files"));
+#else
+  return File::getSpecialLocation(File::userHomeDirectory);
+#endif
+}
+// Hidden per-user folders used by Plugweaver 0.3.0 and older and by source
+// project build scripts. Copies there are removed when a plugin is installed,
+// so a music program never sees the same instrument twice.
+inline File legacyPluginRoot() {
 #if JUCE_MAC
   return File::getSpecialLocation(File::userHomeDirectory)
       .getChildFile("Library/Audio/Plug-Ins");
@@ -42,7 +56,7 @@ inline File pluginInstallRoot() {
       .getChildFile("Programs")
       .getChildFile("Common");
 #else
-  return File::getSpecialLocation(File::userHomeDirectory);
+  return {};
 #endif
 }
 // format is "vst3", "au" or "clap".
@@ -401,29 +415,153 @@ inline void copyPlugin(const File &source, const File &target, const Log &log) {
 #endif
 }
 
-// Installs finished plugins into the user's plugin folders, where music
-// programs look for them.
-inline std::vector<File> installPlugins(const std::vector<BuiltPlugin> &built,
-                                        const Log &log = {}) {
-  std::vector<File> installed;
-  bool audioUnit = false;
-  for (const auto &b : built) {
-    auto target = pluginInstallRoot()
-                      .getChildFile(pluginFolderName(b.format))
-                      .getChildFile(b.file.getFileName());
-    copyPlugin(b.file, target, log);
-    if (log)
-      log("Installed: " + target.getFullPathName() + "\n");
-    installed.push_back(target);
-    audioUnit = audioUnit || b.format == "au";
+//== Installation ==================================================================
+// Implemented in Install.cpp: runs an install script with administrator rights
+// (macOS password dialog, Windows UAC). Returns false with a message when the
+// user cancels or the script fails.
+bool runPrivilegedScript(const File &script, const String &reason,
+                         String &errorMessage);
+
+struct InstallItem {
+  File source, target;
+};
+inline String shellQuote(const String &s) {
+  return "'" + s.replace("'", "'\"'\"'") + "'";
+}
+inline String powerShellQuote(const String &s) {
+  return "'" + s.replace("'", "''") + "'";
+}
+// Script that replaces every target with its source. Old copies are removed
+// first, so no stale files are left inside a bundle.
+inline String installScript(const std::vector<InstallItem> &items,
+                            bool audioUnits) {
+#if JUCE_WINDOWS
+  ignoreUnused(audioUnits);
+  String t = "$ErrorActionPreference = 'Stop'\r\ntry {\r\n";
+  for (const auto &i : items) {
+    auto target = powerShellQuote(i.target.getFullPathName());
+    t << "  New-Item -ItemType Directory -Force -Path "
+      << powerShellQuote(i.target.getParentDirectory().getFullPathName())
+      << " | Out-Null\r\n"
+      << "  if (Test-Path -LiteralPath " << target
+      << ") { Remove-Item -LiteralPath " << target << " -Recurse -Force }\r\n"
+      << "  Copy-Item -LiteralPath "
+      << powerShellQuote(i.source.getFullPathName()) << " -Destination "
+      << target << " -Recurse -Force\r\n";
   }
-#if JUCE_MAC
-  // Make macOS re-read its Audio Unit list so hosts see the new AU.
-  if (audioUnit)
-    runTool({"/usr/bin/killall", "-9", "AudioComponentRegistrar"}, log);
+  t << "} catch { Write-Error $_; exit 1 }\r\nexit 0\r\n";
 #else
-  ignoreUnused(audioUnit);
+  String t = "#!/bin/sh\nset -e\n";
+  for (const auto &i : items) {
+    auto target = shellQuote(i.target.getFullPathName());
+    t << "mkdir -p "
+      << shellQuote(i.target.getParentDirectory().getFullPathName()) << "\n"
+      << "rm -rf " << target << "\n"
+#if JUCE_MAC
+      << "/usr/bin/ditto "
+#else
+      << "cp -R "
 #endif
+      << shellQuote(i.source.getFullPathName()) << " " << target << "\n";
+  }
+  // Make macOS re-read its Audio Unit list so hosts see the new AU.
+  if (audioUnits)
+    t << "/usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true\n";
+#endif
+  return t;
+}
+inline File writeInstallScript(const String &text, const File &folder) {
+#if JUCE_WINDOWS
+  // UTF-8 with byte order mark, so Windows PowerShell reads names such as
+  // "Flygel Ø" correctly.
+  auto script = folder.getChildFile("install.ps1");
+  MemoryOutputStream data;
+  data.writeByte(char(0xef));
+  data.writeByte(char(0xbb));
+  data.writeByte(char(0xbf));
+  data.write(text.toRawUTF8(), text.getNumBytesAsUTF8());
+  require(script.replaceWithData(data.getData(), data.getDataSize()),
+          "Cannot write the install script");
+#else
+  auto script = folder.getChildFile("install.sh");
+  require(script.replaceWithText(text, false, false, "\n"),
+          "Cannot write the install script");
+#endif
+  return script;
+}
+// Runs the install script with the current user's rights.
+inline bool runInstallScript(const File &script, const Log &log) {
+#if JUCE_WINDOWS
+  return runTool({"powershell.exe", "-NoProfile", "-NonInteractive",
+                  "-ExecutionPolicy", "Bypass", "-File",
+                  script.getFullPathName()},
+                 log) == 0;
+#else
+  return runTool({"/bin/sh", script.getFullPathName()}, log) == 0;
+#endif
+}
+// True when the current user can create files in `folder` (creating it if
+// needed). Checked by writing a probe file, because file attributes alone do
+// not show Windows access rights.
+inline bool canWriteTo(const File &folder) {
+  if (!folder.isDirectory() && !folder.createDirectory().wasOk())
+    return false;
+  auto probe = folder.getNonexistentChildFile(".plugweaver-write-test", "");
+  bool ok = probe.create().wasOk();
+  probe.deleteFile();
+  return ok;
+}
+
+// Installs finished plugins into the standard plugin folders (see
+// pluginInstallRoot), asking for administrator approval when those folders
+// are not writable, and removes older copies from the hidden per-user folders.
+inline std::vector<File> installPlugins(const std::vector<BuiltPlugin> &built,
+                                        const Log &log = {},
+                                        const File &root = pluginInstallRoot(),
+                                        const File &legacyRoot =
+                                            legacyPluginRoot()) {
+  require(!built.empty(), "Nothing to install");
+  std::vector<InstallItem> items;
+  bool audioUnits = false, writable = true;
+  for (const auto &b : built) {
+    auto folder = root.getChildFile(pluginFolderName(b.format));
+    items.push_back({b.file, folder.getChildFile(b.file.getFileName())});
+    audioUnits = audioUnits || b.format == "au";
+    writable = writable && canWriteTo(folder);
+  }
+  auto script = writeInstallScript(installScript(items, audioUnits),
+                                   built.front().file.getParentDirectory());
+  if (writable) {
+    require(runInstallScript(script, log),
+            "Could not install the plugins. Close your music program and "
+            "try again.");
+  } else {
+    if (log)
+      log("Asking for permission to install in " + root.getFullPathName() +
+          "...\n");
+    String why;
+    require(runPrivilegedScript(
+                script,
+                "Artilody Plugweaver wants to install the plugin in " +
+                    root.getFullPathName() + ".",
+                why),
+            why.isNotEmpty() ? why : String("Installation was not approved"));
+  }
+  std::vector<File> installed;
+  for (const auto &i : items) {
+    require(i.target.exists(), "Not installed: " + i.target.getFullPathName());
+    if (log)
+      log("Installed: " + i.target.getFullPathName() + "\n");
+    installed.push_back(i.target);
+    // An older copy in a hidden per-user folder would show up as a second,
+    // outdated instrument in music programs.
+    if (legacyRoot != File() && legacyRoot != root) {
+      auto old = legacyRoot.getChildFile(i.target.getParentDirectory().getFileName())
+                     .getChildFile(i.target.getFileName());
+      if (old.exists() && old.deleteRecursively() && log)
+        log("Removed older copy: " + old.getFullPathName() + "\n");
+    }
+  }
   return installed;
 }
 
@@ -464,10 +602,6 @@ inline File savePluginCopies(const Document &d,
   }
   text << "\nTo use the instrument on another computer, copy a plugin into "
           "the same folder there.";
-#if JUCE_MAC
-  text << "\nOn a Mac, the Library folder (Bibliotek) is hidden in Finder: "
-          "choose Go > Go to Folder... and paste the folder path.";
-#endif
   text << "\n";
   folder.getChildFile("Read me.txt").replaceWithText(text);
   if (log)

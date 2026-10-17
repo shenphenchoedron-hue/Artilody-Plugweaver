@@ -124,6 +124,40 @@ int main(int argc, char **argv) {
       doc.name = "Console Piano"; // only exact device names are reserved
       pw::validateForExport(doc, true, false, false);
     }
+    // Installation script: replaces older copies (also stale files inside a
+    // bundle), handles spaces, apostrophes and non-ASCII names, and removes
+    // copies from the old hidden per-user folders.
+    {
+      auto area = root.getChildFile("install-test");
+      area.deleteRecursively();
+      auto staged = area.getChildFile("staged"),
+           system = area.getChildFile("system"),
+           legacy = area.getChildFile("legacy");
+      const String name = CharPointer_UTF8("Lone's \xc3\x98 Piano");
+      auto bundle = staged.getChildFile(name + ".vst3");
+      assert(bundle.getChildFile("Contents").createDirectory().wasOk());
+      assert(bundle.getChildFile("Contents/binary").replaceWithText("new"));
+      auto single = staged.getChildFile(name + ".clap");
+      assert(single.replaceWithText("clap"));
+      std::vector<pw::BuiltPlugin> fake{{"vst3", bundle}, {"clap", single}};
+      auto vst3Folder = system.getChildFile(pw::pluginFolderName("vst3"));
+      auto stale = vst3Folder.getChildFile(name + ".vst3/Contents/stale");
+      assert(stale.getParentDirectory().createDirectory().wasOk() &&
+             stale.replaceWithText("old"));
+      auto oldCopy = legacy.getChildFile(pw::pluginFolderName("clap"))
+                         .getChildFile(name + ".clap");
+      assert(oldCopy.getParentDirectory().createDirectory().wasOk() &&
+             oldCopy.replaceWithText("old"));
+      auto installedFiles = pw::installPlugins(
+          fake, [](const String &line) { std::cout << line; }, system, legacy);
+      assert(installedFiles.size() == 2);
+      assert(vst3Folder.getChildFile(name + ".vst3/Contents/binary")
+                 .loadFileAsString() == "new");
+      assert(!stale.exists() && !oldCopy.exists());
+      assert(system.getChildFile(pw::pluginFolderName("clap"))
+                 .getChildFile(name + ".clap")
+                 .loadFileAsString() == "clap");
+    }
     // Plugins built from the prebuilt engine: two instruments loaded side by
     // side must keep their own name, maker, id and sound.
     ScopedJuceInitialiser_GUI gui;

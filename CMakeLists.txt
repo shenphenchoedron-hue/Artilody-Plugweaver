@@ -75,8 +75,11 @@ add_custom_command(OUTPUT "${engine_zip}"
 add_custom_target(PWEngineArchive DEPENDS "${engine_zip}")
 
 juce_add_binary_data(BuilderAssets NAMESPACE BuilderAssets HEADER_NAME BuilderAssets.h SOURCES "${CMAKE_CURRENT_BINARY_DIR}/engine_template.zip" Assets/logo.png)
-add_library(PWRuntime STATIC Source/Runtime.cpp)
+add_library(PWRuntime STATIC Source/Runtime.cpp Source/Install.cpp)
 target_link_libraries(PWRuntime PRIVATE juce::juce_audio_utils juce::juce_gui_extra juce::juce_dsp juce::juce_recommended_config_flags)
+if(WIN32)
+    target_link_libraries(PWRuntime PUBLIC shell32)
+endif()
 target_include_directories(PWRuntime PUBLIC "${juce_SOURCE_DIR}/modules" EngineTemplate/Source Source)
 target_compile_definitions(PWRuntime PUBLIC JUCE_PLUGINHOST_VST3=1 PW_CMAKE_PATH="${CMAKE_COMMAND}" JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_STANDALONE_APPLICATION=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0)
 juce_add_gui_app(Plugweaver PRODUCT_NAME "Artilody Plugweaver" COMPANY_NAME Artilody BUNDLE_ID org.artilody.plugweaver ICON_BIG Assets/icon.png)

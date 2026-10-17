@@ -88,9 +88,13 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           sudo installer -pkg dist/*.pkg -target /
+          # The runner has no one to type a password, so let the app write to
+          # the system plugin folders directly.
+          sudo mkdir -p /Library/Audio/Plug-Ins/VST3 /Library/Audio/Plug-Ins/Components /Library/Audio/Plug-Ins/CLAP
+          sudo chmod a+rwx /Library/Audio/Plug-Ins/VST3 /Library/Audio/Plug-Ins/Components /Library/Audio/Plug-Ins/CLAP
           "/Applications/Artilody Plugweaver.app/Contents/MacOS/Artilody Plugweaver" --export-test "$RUNNER_TEMP/export-test" --install
           cat "$RUNNER_TEMP/export-test/result.txt"
-          P="$HOME/Library/Audio/Plug-Ins"
+          P="/Library/Audio/Plug-Ins"
           for b in "VST3/Plugweaver Export Test.vst3" "Components/Plugweaver Export Test.component" "CLAP/Plugweaver Export Test.clap"; do
             codesign --verify --deep --strict "$P/$b"
             lipo "$P/$b/Contents/MacOS/Plugweaver Export Test" -verify_arch x86_64 arm64
@@ -110,9 +114,10 @@ jobs:
           $p = Start-Process $exe -ArgumentList '--export-test',"$env:RUNNER_TEMP\export-test",'--install' -Wait -PassThru
           Get-Content "$env:RUNNER_TEMP\export-test\result.txt"
           if ($p.ExitCode -ne 0) { exit 1 }
-          Get-ChildItem -Recurse "$env:LOCALAPPDATA\Programs\Common" | Select-Object FullName
+          $plugins = "$env:CommonProgramFiles"
+          Get-ChildItem -Recurse "$plugins\VST3\Plugweaver Export Test.vst3", "$plugins\CLAP\Plugweaver Export Test.clap" | Select-Object FullName
           # No Visual C++ runtime DLLs needed by the app or the plugins.
-          $files = @($exe) + (Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs\Common" | ForEach-Object FullName)
+          $files = @($exe, "$plugins\CLAP\Plugweaver Export Test.clap") + (Get-ChildItem -Recurse -File "$plugins\VST3\Plugweaver Export Test.vst3" | ForEach-Object FullName)
           foreach ($f in $files) {
             $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($f))
             if ($text -match '(?i)(vcruntime140|msvcp140)[_0-9]*\.dll') { Write-Error "$f needs $($Matches[0])"; exit 1 }

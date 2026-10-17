@@ -100,21 +100,27 @@ Under Export vælges **VST3**, **AU** og/eller **CLAP**. AU findes kun på Mac.
 **Build plugin** laver de valgte formater ud fra den indbyggede plugin-motor og
 installerer dem med det samme – typisk på få sekunder og uden andre programmer.
 Alle lyde, billeder og indstillinger ligger inde i plugin'et; brugeren behøver ikke
-Plugweaver. Plugins installeres i brugerens egne pluginmapper:
+Plugweaver. Plugins installeres i computerens almindelige pluginmapper, som alle
+musikprogrammer kigger i, og som kan ses i Finder/Stifinder:
 
 | System | VST3 | AU | CLAP |
 |---|---|---|---|
-| macOS | `~/Library/Audio/Plug-Ins/VST3/` | `~/Library/Audio/Plug-Ins/Components/` | `~/Library/Audio/Plug-Ins/CLAP/` |
-| Windows | `%LOCALAPPDATA%\Programs\Common\VST3\` | – | `%LOCALAPPDATA%\Programs\Common\CLAP\` |
+| macOS | `/Library/Audio/Plug-Ins/VST3/` | `/Library/Audio/Plug-Ins/Components/` | `/Library/Audio/Plug-Ins/CLAP/` |
+| Windows | `C:\Program Files\Common Files\VST3\` | – | `C:\Program Files\Common Files\CLAP\` |
 | Linux | `~/.vst3/` | – | `~/.clap/` |
+
+På Mac er det **Macintosh HD → Bibliotek → Audio → Plug-Ins** (ikke den skjulte Bibliotek-mappe
+i din brugermappe). Mapperne tilhører systemet, så macOS beder om din adgangskode, og
+Windows viser sin normale tilladelsesdialog, når et plugin installeres. Ældre kopier af
+samme instrument i de skjulte brugermapper (fra Plugweaver 0.3.0) fjernes automatisk,
+så musikprogrammet ikke ser instrumentet to gange.
 
 **Du kan altid se, at filerne er lavet:**
 
 - Efter hvert build viser appen en besked med alle filer og deres placering, med knapperne
   **Show installed files** og **Open copy**.
-- Export-fanen viser for hvert format, om det er installeret (med tidspunkt). Knappen
-  **Show** åbner Finder/Stifinder direkte ved filen. På Mac ligger pluginmapperne i
-  Bibliotek (`Library`), som Finder skjuler, men **Show** åbner den alligevel.
+- Export-fanen viser for hvert format den fulde sti, og om det er installeret (med
+  tidspunkt). Knappen **Show** åbner Finder/Stifinder direkte ved filen.
 - En synlig kopi af de færdige plugins gemmes i `Dokumenter/Artilody Plugweaver/Plugins/<instrument>/`
   sammen med en `Read me.txt`, der fortæller, hvor de er installeret. Kopien kan sendes
   videre og installeres på en anden computer; musikprogrammerne bruger de installerede filer.
@@ -129,9 +135,8 @@ igen, og scan plugins igen:
 - FL Studio: Options > Manage plugins > Find installed plugins.
 
 Find dem under instrumenter (producent = Maker), ikke audioeffekter. Logic bruger AU;
-Pro Tools' AAX-format understøttes ikke. Scanner dit musikprogram ikke mapperne på
-Windows eller Linux, så tilføj dem i programmets pluginindstillinger. På Windows skal
-musikprogrammet være lukket, når et instrument geninstalleres.
+Pro Tools' AAX-format understøttes ikke. På Windows skal musikprogrammet være lukket,
+når et instrument geninstalleres.
 
 **Export source project** (for udviklere) opretter et selvstændigt C++/CMake-projekt med
 `instrument.zip`, licenser, buildfiler til Mac, Windows og Linux og et GitHub
