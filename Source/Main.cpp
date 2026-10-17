@@ -896,10 +896,10 @@ class Main final : public AudioAppComponent,
                        .getChildFile("Plugweaver-build")
                        .getChildFile(Uuid().toDashedString());
       appendLog("Building " + snapshot.name + "...\n");
-      auto built =
-          pw::createPlugins(snapshot, v, a, c, *engineArchive, stage, log);
       std::vector<File> installed;
       try {
+        auto built =
+            pw::createPlugins(snapshot, v, a, c, *engineArchive, stage, log);
         installed = pw::installPlugins(built, log);
       } catch (...) {
         stage.deleteRecursively();

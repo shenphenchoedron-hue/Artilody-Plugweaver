@@ -108,6 +108,22 @@ int main(int argc, char **argv) {
     assert(pw::pluginFolderName("vst3").isNotEmpty() &&
            pw::pluginExtension("au") == ".component" &&
            pw::pluginInstallRoot().getFullPathName().isNotEmpty());
+    for (auto reservedName : {"CON", "nul", "COM1", "Lpt9.Piano"}) {
+      auto doc = restored;
+      doc.name = reservedName;
+      rejected = false;
+      try {
+        pw::validateForExport(doc, true, false, false);
+      } catch (const std::exception &) {
+        rejected = true;
+      }
+      assert(rejected);
+    }
+    {
+      auto doc = restored;
+      doc.name = "Console Piano"; // only exact device names are reserved
+      pw::validateForExport(doc, true, false, false);
+    }
     // Plugins built from the prebuilt engine: two instruments loaded side by
     // side must keep their own name, maker, id and sound.
     ScopedJuceInitialiser_GUI gui;

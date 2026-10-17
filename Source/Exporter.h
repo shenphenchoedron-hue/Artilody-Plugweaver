@@ -98,6 +98,15 @@ inline void validateForExport(const Document &d, bool vst3, bool au,
               !d.maker.containsAnyOf(";\r\n"),
           "Use an instrument name under 80 characters without path separators, "
           "line breaks or the characters $ { } [ ] \\ \"");
+  // Names Windows reserves for devices, also with an extension (CON.vst3).
+  auto base = d.name.upToFirstOccurrenceOf(".", false, false).trim().toUpperCase();
+  static const StringArray reserved{"CON", "PRN", "AUX", "NUL"};
+  bool device = reserved.contains(base) ||
+                ((base.startsWith("COM") || base.startsWith("LPT")) &&
+                 base.length() == 4 && base.getLastCharacter() >= '0' &&
+                 base.getLastCharacter() <= '9');
+  require(!device, "\"" + d.name + "\" is a reserved name on Windows; "
+                   "choose another instrument name");
   require(vst3 || au || clap, "Select at least one plugin format");
 }
 // This only extracts the trusted code archive compiled into Plugweaver, never a

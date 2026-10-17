@@ -90,8 +90,15 @@ jobs:
           sudo installer -pkg dist/*.pkg -target /
           "/Applications/Artilody Plugweaver.app/Contents/MacOS/Artilody Plugweaver" --export-test "$RUNNER_TEMP/export-test" --install
           cat "$RUNNER_TEMP/export-test/result.txt"
-          codesign --verify --deep --strict "$HOME/Library/Audio/Plug-Ins/Components/Plugweaver Export Test.component"
-          auval -v aumu "$(/usr/libexec/PlistBuddy -c 'Print :AudioComponents:0:subtype' "$HOME/Library/Audio/Plug-Ins/Components/Plugweaver Export Test.component/Contents/Info.plist")" Arti | tail -3
+          P="$HOME/Library/Audio/Plug-Ins"
+          for b in "VST3/Plugweaver Export Test.vst3" "Components/Plugweaver Export Test.component" "CLAP/Plugweaver Export Test.clap"; do
+            codesign --verify --deep --strict "$P/$b"
+            lipo "$P/$b/Contents/MacOS/Plugweaver Export Test" -verify_arch x86_64 arm64
+          done
+          subtype="$(/usr/libexec/PlistBuddy -c 'Print :AudioComponents:0:subtype' "$P/Components/Plugweaver Export Test.component/Contents/Info.plist")"
+          auval -v aumu "$subtype" Arti > auval.log 2>&1 || true
+          tail -3 auval.log
+          grep -q "AU VALIDATION SUCCEEDED" auval.log
       - name: Install and run (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -118,7 +125,10 @@ jobs:
           xvfb-run -a artilody-plugweaver --export-test "$RUNNER_TEMP/export-test" --install
           cat "$RUNNER_TEMP/export-test/result.txt"
           ls -la ~/.vst3 ~/.clap
-          ldd "build/Plugweaver_artefacts/Release/Artilody Plugweaver" | grep -E "stdc\+\+|gcc_s" && exit 1 || echo "No libstdc++/libgcc runtime dependency"
+          for f in /opt/artilody-plugweaver/artilody-plugweaver ~/.clap/*.clap ~/.vst3/*.vst3/Contents/x86_64-linux/*.so; do
+            if ldd "$f" | grep -E "libstdc\+\+|libgcc_s"; then echo "$f needs a C++ runtime library"; exit 1; fi
+          done
+          echo "No libstdc++/libgcc runtime dependency in app or plugins"
       - name: Portable archive
         shell: bash
         run: |
