@@ -99,9 +99,6 @@ inline void validateForExport(const Document &d, bool vst3, bool au,
           "Use an instrument name under 80 characters without path separators, "
           "line breaks or the characters $ { } [ ] \\ \"");
   require(vst3 || au || clap, "Select at least one plugin format");
-#if !JUCE_MAC
-  require(!au, "Audio Units can only be built on macOS");
-#endif
 }
 // This only extracts the trusted code archive compiled into Plugweaver, never a
 // user template.
@@ -286,6 +283,7 @@ createPlugins(const Document &d, bool vst3, bool au, bool clap,
               InputStream &engineArchive, const File &stage,
               const Log &log = {}) {
   validateForExport(d, vst3, au, clap);
+  require(hasAudioUnits || !au, "Audio Units can only be built on macOS");
   require(stage.deleteRecursively() && stage.createDirectory().wasOk(),
           "Cannot create " + stage.getFullPathName());
   auto engineDir = stage.getChildFile("engine");
