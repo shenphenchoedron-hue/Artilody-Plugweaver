@@ -108,6 +108,17 @@ Plugweaver. Plugins installeres i brugerens egne pluginmapper:
 | Windows | `%LOCALAPPDATA%\Programs\Common\VST3\` | – | `%LOCALAPPDATA%\Programs\Common\CLAP\` |
 | Linux | `~/.vst3/` | – | `~/.clap/` |
 
+**Du kan altid se, at filerne er lavet:**
+
+- Efter hvert build viser appen en besked med alle filer og deres placering, med knapperne
+  **Show installed files** og **Open copy**.
+- Export-fanen viser for hvert format, om det er installeret (med tidspunkt). Knappen
+  **Show** åbner Finder/Stifinder direkte ved filen. På Mac ligger pluginmapperne i
+  Bibliotek (`Library`), som Finder skjuler, men **Show** åbner den alligevel.
+- En synlig kopi af de færdige plugins gemmes i `Dokumenter/Artilody Plugweaver/Plugins/<instrument>/`
+  sammen med en `Read me.txt`, der fortæller, hvor de er installeret. Kopien kan sendes
+  videre og installeres på en anden computer; musikprogrammerne bruger de installerede filer.
+
 På Mac er plugins universelle (Intel og Apple Silicon) og ad-hoc-signeret med macOS'
 indbyggede `codesign`. Hvert build får et nyt versionsnummer, gamle kopier fjernes før
 installation, og macOS' AU-liste opdateres automatisk. Luk musikprogrammet helt, åbn det

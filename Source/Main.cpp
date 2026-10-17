@@ -76,6 +76,9 @@ class Main final : public AudioAppComponent,
   Image backgroundImage;
   // Text shown in paint(), computed in refresh() so painting stays cheap.
   String infoSamples, infoRange, infoCode;
+  // Export tab: where each format is installed and whether it exists yet.
+  String installStatus[4];
+  bool installed[4] = {};
   String waveAsset;
 
   // Header
@@ -100,7 +103,10 @@ class Main final : public AudioAppComponent,
       reverb{"reverb", "Reverb"}, master{"gain", "Master volume"};
   TableListBox regionTable{"Regions", this};
   TextButton exportBuild{"Build plugin"}, exportSource{"Export source project"},
-      openPlugins{"Show plugin folders"};
+      openPlugins{"Show installed files"};
+  // One "Show" button per row of the Export card: opens Finder/Explorer at the
+  // file itself, also inside folders Finder hides (Library on macOS).
+  TextButton showFile[4];
   TextEditor buildLog;
   // Plugin settings
   TextEditor instrumentName, maker;
@@ -227,6 +233,7 @@ class Main final : public AudioAppComponent,
       infoRange = lo >= 0 ? noteName(lo) + " - " + noteName(hi)
                           : String("No samples yet");
       infoCode = pw::pluginCode(document);
+      updateInstallStatus();
     }
     piano.accent = col::accent;
     templateBox.setText(t.name, dontSendNotification);
@@ -487,6 +494,30 @@ class Main final : public AudioAppComponent,
         });
       }
     });
+  }
+  // Index 0-2: VST3, AU, CLAP in the plugin folders; 3: the visible copy.
+  File installedFile(int index) const {
+    static const char *formats[] = {"vst3", "au", "clap"};
+    if (index == 3)
+      return pw::pluginCopyFolder(document);
+    return pw::pluginInstallRoot()
+        .getChildFile(pw::pluginFolderName(formats[index]))
+        .getChildFile(document.name + pw::pluginExtension(formats[index]));
+  }
+  void updateInstallStatus() {
+    for (int i = 0; i < 4; ++i) {
+      auto f = installedFile(i);
+      installed[i] = document.name.isNotEmpty() && f.exists() &&
+                     (i < 3 || f.findChildFiles(File::findFilesAndDirectories,
+                                                false, "*.vst3;*.component;*.clap")
+                                   .size() > 0);
+      installStatus[i] =
+          installed[i]
+              ? (i < 3 ? "Installed " : "Saved ") +
+                    f.getLastModificationTime().formatted("%d %b %H:%M")
+              : String("Not built yet");
+      showFile[i].setEnabled(installed[i]);
+    }
   }
   void appendLog(const String &text) {
     Component::SafePointer<Main> safe(this);
@@ -896,24 +927,71 @@ class Main final : public AudioAppComponent,
                        .getChildFile("Plugweaver-build")
                        .getChildFile(Uuid().toDashedString());
       appendLog("Building " + snapshot.name + "...\n");
-      std::vector<File> installed;
+      std::vector<File> installedFiles;
+      File copyFolder;
       try {
         auto built =
             pw::createPlugins(snapshot, v, a, c, *engineArchive, stage, log);
-        installed = pw::installPlugins(built, log);
+        installedFiles = pw::installPlugins(built, log);
+        copyFolder = pw::savePluginCopies(snapshot, built, log);
       } catch (...) {
         stage.deleteRecursively();
         throw;
       }
       stage.deleteRecursively();
-      return [this, installed] {
-        message("Plugin installed - quit and reopen your DAW, then rescan "
-                "plugins");
-        appendLog("\nDone. Restart your DAW and rescan plugins.\n");
-        if (!installed.empty())
-          installed.front().revealToUser();
+      return [this, installedFiles, copyFolder, name = snapshot.name] {
+        updateInstallStatus();
+        repaint();
+        message(name + " is installed - quit and reopen your music program, "
+                       "then rescan plugins");
+        appendLog("\nDone. Restart your music program and rescan plugins.\n");
+        showBuildResult(name, installedFiles, copyFolder);
       };
     });
+  }
+  // Tells the user exactly which files were made and where, with buttons that
+  // open them: the installed plugins live in folders Finder hides on macOS.
+  void showBuildResult(const String &name, const std::vector<File> &files,
+                       const File &copyFolder) {
+    auto home =
+        File::getSpecialLocation(File::userHomeDirectory).getFullPathName();
+    auto shortPath = [&home](String path) {
+#if !JUCE_WINDOWS
+      if (path.startsWith(home))
+        path = "~" + path.substring(home.length());
+#endif
+      return path;
+    };
+    String text = "The plugin files were created and installed where music "
+                  "programs look for them:\n\n";
+    for (auto &f : files) {
+      auto ext = f.getFileExtension().substring(1);
+      text << (ext == "component" ? String("AU") : ext.toUpperCase()) << ":  "
+           << shortPath(f.getFullPathName()) << "\n";
+    }
+#if JUCE_MAC
+    text << "\n~ is your home folder. Library (Bibliotek) is hidden in Finder, "
+            "so use the button below to see the files.";
+#endif
+    text << "\n\nA copy you can always see and pass on:\n"
+         << shortPath(copyFolder.getFullPathName())
+         << "\n\nQuit and reopen your music program, then rescan plugins.";
+    auto first = files.empty() ? File() : files.front();
+    AlertWindow::showAsync(
+        MessageBoxOptions()
+            .withIconType(MessageBoxIconType::InfoIcon)
+            .withTitle(name + " is ready")
+            .withMessage(text)
+            .withButton("Show installed files")
+            .withButton("Open copy")
+            .withButton("OK")
+            .withAssociatedComponent(this),
+        [first, copyFolder](int result) {
+          if (result == 1 && first.exists())
+            first.revealToUser();
+          else if (result == 2 && copyFolder.isDirectory())
+            copyFolder.startAsProcess();
+        });
   }
   // Writes a complete C++/CMake project for developers. Building it needs a
   // compiler and CMake; Build plugin does not.
@@ -1022,13 +1100,24 @@ public:
     style(exportBuild, "primary", "cube");
     style(exportSource, "", "folder");
     style(openPlugins, "", "folder");
+    for (int i = 0; i < 4; ++i) {
+      manage(showFile[i]);
+      showFile[i].setButtonText("Show");
+      style(showFile[i], "", "folder");
+      showFile[i].setTooltip("Open the folder with this file selected");
+      showFile[i].onClick = [this, i] {
+        updateInstallStatus();
+        repaint();
+        if (installed[i])
+          installedFile(i).revealToUser();
+      };
+    }
     manage(buildLog);
     buildLog.setMultiLine(true);
     buildLog.setJustification(Justification::topLeft);
     buildLog.setIndents(12, 10);
     buildLog.setTextToShowWhenEmpty(
-        "Build output appears here. Build plugin creates and installs the "
-        "selected formats in a few seconds - no other software is needed.",
+        "Build output appears here. Building takes a few seconds.",
         col::dim);
     buildLog.setReadOnly(true);
     buildLog.setScrollbarsShown(true);
@@ -1177,13 +1266,19 @@ public:
       choose(Build);
     };
     exportSource.onClick = [this] { choose(Export); };
-    openPlugins.onClick = [] {
-      auto root = pw::pluginInstallRoot();
-#if JUCE_LINUX || JUCE_BSD
-      root = root.getChildFile(".vst3");
-#endif
-      root.createDirectory();
-      root.revealToUser();
+    // Shows this instrument's installed plugin selected in Finder/Explorer,
+    // or the plugin folder when it has not been built yet.
+    openPlugins.onClick = [this] {
+      updateInstallStatus();
+      repaint();
+      for (int i = 0; i < 3; ++i)
+        if (installed[i]) {
+          installedFile(i).revealToUser();
+          return;
+        }
+      auto folder = installedFile(0).getParentDirectory();
+      folder.createDirectory();
+      folder.revealToUser();
     };
     import.onClick = [this] { choose(Import); };
     chooseBackground.onClick = [this] { choose(Background); };
@@ -1588,51 +1683,57 @@ public:
       return;
     auto r = exportInfo.reduced(24, 18);
     drawTitle(g, "Formats and installation", r.removeFromTop(28), "cube", 18);
-    r.removeFromTop(10);
-    String safe = document.name;
+    r.removeFromTop(8);
     struct Row {
       ToggleButton *t;
       String label, format;
     } rows[] = {{&vst3, "VST3", "vst3"},
                 {&au, "AU (Logic, GarageBand)", "au"},
-                {&clap, "CLAP", "clap"}};
-    auto root = pw::pluginInstallRoot().getFullPathName();
+                {&clap, "CLAP", "clap"},
+                {nullptr, "Copy you can see", ""}};
+    auto shortPath = [](String path) {
 #if !JUCE_WINDOWS
-    auto home = File::getSpecialLocation(File::userHomeDirectory)
-                    .getFullPathName();
-    if (root.startsWith(home))
-      root = "~" + root.substring(home.length());
+      auto home = File::getSpecialLocation(File::userHomeDirectory)
+                      .getFullPathName();
+      if (path.startsWith(home))
+        path = "~" + path.substring(home.length());
 #endif
-    g.setFont(sans(15.f));
-    for (auto &row : rows) {
+      return path;
+    };
+    for (int i = 0; i < 4; ++i) {
+      auto &row = rows[i];
       auto line = r.removeFromTop(26);
-      bool on = row.t->getToggleState();
-      g.setColour(on ? col::accent : col::dim);
+      bool on = row.t == nullptr || row.t->getToggleState();
+      g.setColour(installed[i] ? col::accent : on ? col::muted : col::dim);
       g.fillEllipse(line.removeFromLeft(14).toFloat().withSizeKeepingCentre(8, 8));
       line.removeFromLeft(6);
+      g.setFont(sans(15.f));
       g.setColour(on ? col::text : col::dim);
-      g.drawText(row.label, line.removeFromLeft(200), Justification::centredLeft);
+      g.drawText(row.label, line.removeFromLeft(190), Justification::centredLeft);
+      line.removeFromRight(92); // "Show" button
+      auto status = line.removeFromRight(130);
+      g.setColour(installed[i] ? col::accent : col::dim);
+      g.setFont(sans(14.f));
+      g.drawText(installStatus[i], status, Justification::centredRight);
       g.setColour(on ? col::muted : col::dim);
-      auto sep = File::getSeparatorString();
-      g.drawFittedText(on ? root + sep + pw::pluginFolderName(row.format) +
-                                sep + safe + pw::pluginExtension(row.format)
-                          : String(row.t->isEnabled() ? "not selected"
-                                                      : "macOS only"),
-                       line, Justification::centredLeft, 1);
+      String where = row.t != nullptr && !row.t->isEnabled() ? String("macOS only")
+                     : !on ? String("not selected")
+                           : shortPath(installedFile(i).getFullPathName());
+      g.drawFittedText(where, line.reduced(4, 0), Justification::centredLeft, 1);
     }
     r.removeFromTop(8);
     g.setColour(col::muted);
     g.setFont(sans(14.f));
     g.drawFittedText(
-        "Plugin identity: manufacturer Arti, code " + infoCode +
-            ". Every build gets a new version number so hosts notice the "
-            "update.\nAfter building: quit and reopen your DAW. Logic: "
-            "Plug-in Manager > Reset & Rescan. REAPER: Preferences > "
-            "Plug-ins > Re-scan. FL Studio: Options > Manage plugins > Find "
-            "installed plugins. Find it among instruments (" +
+#if JUCE_MAC
+        "The plugin folders are inside Library (Bibliotek), which Finder "
+        "hides: click Show to open the folder with the file selected. "
+#endif
+        "After building: quit and reopen your music program and rescan "
+        "plugins. Find it among instruments (" +
             (document.maker.isNotEmpty() ? document.maker : String("maker")) +
-            "), not effects.",
-        r.removeFromTop(78), Justification::topLeft, 5);
+            "), not effects. Plugin code " + infoCode + ".",
+        r, Justification::topLeft, 3);
   }
   void paint(Graphics &g) override {
     g.setGradientFill(ColourGradient(col::bgTop, 0, 0, col::bgBottom, 0,
@@ -1821,9 +1922,21 @@ public:
     headerCard = in.removeFromTop(jlimit(84, 120, body.getHeight() / 5));
     in.removeFromTop(8);
     if (tab == 3) {
-      auto card = in.removeFromTop(206);
+      auto card = in.removeFromTop(252);
       panels.push_back({card, "", ""});
       exportInfo = card;
+      {
+        // Same row geometry as paintExportInfo().
+        auto rowsArea = card.reduced(24, 18);
+        rowsArea.removeFromTop(36);
+        for (auto &b : showFile) {
+          auto line = rowsArea.removeFromTop(26);
+          place(b, line.removeFromRight(84).reduced(0, 1));
+          b.setEnabled(false);
+        }
+        for (int i = 0; i < 4; ++i)
+          showFile[i].setEnabled(installed[i]);
+      }
       in.removeFromTop(12);
       auto buttons = in.removeFromTop(48);
       place(exportBuild, buttons.removeFromLeft(220));
@@ -2164,11 +2277,16 @@ public:
       for (auto &b : built)
         result << b.format << ": " << b.file.getFullPathName() << "\n";
       ok = !built.empty();
-      if (install)
+      if (install) {
         for (auto &file : pw::installPlugins(built)) {
           pw::require(file.exists(), "Not installed: " + file.getFullPathName());
           result << "installed: " << file.getFullPathName() << "\n";
         }
+        auto copies = pw::savePluginCopies(d, built);
+        pw::require(copies.getChildFile("Read me.txt").existsAsFile(),
+                    "Copy not saved");
+        result << "copy: " << copies.getFullPathName() << "\n";
+      }
     } catch (const std::exception &e) {
       result << "FAILED: " << e.what() << "\n";
     }

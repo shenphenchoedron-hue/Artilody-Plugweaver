@@ -378,32 +378,40 @@ createPlugins(const Document &d, bool vst3, bool au, bool clap,
   return built;
 }
 
-// Copies finished plugins into the user's plugin folders. Older copies are
-// removed first, so no stale files are left inside a bundle.
+// Copies one finished plugin (bundle or file), replacing an older copy, so no
+// stale files are left inside a bundle.
+inline void copyPlugin(const File &source, const File &target, const Log &log) {
+  require(target.getParentDirectory().createDirectory().wasOk(),
+          "Cannot create " + target.getParentDirectory().getFullPathName());
+  if (target.exists())
+    require(target.deleteRecursively(),
+            "Cannot replace " + target.getFullPathName() +
+                ". Close your music program and try again.");
+#if JUCE_MAC
+  require(runTool({"/usr/bin/ditto", source.getFullPathName(),
+                   target.getFullPathName()},
+                  log) == 0,
+          "Cannot copy to " + target.getFullPathName());
+#else
+  ignoreUnused(log);
+  bool ok = source.isDirectory() ? source.copyDirectoryTo(target)
+                                 : source.copyFileTo(target);
+  require(ok, "Cannot copy to " + target.getFullPathName() +
+                  ". Close your music program and try again.");
+#endif
+}
+
+// Installs finished plugins into the user's plugin folders, where music
+// programs look for them.
 inline std::vector<File> installPlugins(const std::vector<BuiltPlugin> &built,
                                         const Log &log = {}) {
   std::vector<File> installed;
   bool audioUnit = false;
   for (const auto &b : built) {
-    auto folder = pluginInstallRoot().getChildFile(pluginFolderName(b.format));
-    require(folder.createDirectory().wasOk(),
-            "Cannot create " + folder.getFullPathName());
-    auto target = folder.getChildFile(b.file.getFileName());
-    if (target.exists())
-      require(target.deleteRecursively(),
-              "Cannot replace " + target.getFullPathName() +
-                  ". Close your music program and try again.");
-#if JUCE_MAC
-    require(runTool({"/usr/bin/ditto", b.file.getFullPathName(),
-                     target.getFullPathName()},
-                    log) == 0,
-            "Cannot install " + target.getFullPathName());
-#else
-    bool ok = b.file.isDirectory() ? b.file.copyDirectoryTo(target)
-                                   : b.file.copyFileTo(target);
-    require(ok, "Cannot install " + target.getFullPathName() +
-                    ". Close your music program and try again.");
-#endif
+    auto target = pluginInstallRoot()
+                      .getChildFile(pluginFolderName(b.format))
+                      .getChildFile(b.file.getFileName());
+    copyPlugin(b.file, target, log);
     if (log)
       log("Installed: " + target.getFullPathName() + "\n");
     installed.push_back(target);
@@ -417,5 +425,53 @@ inline std::vector<File> installPlugins(const std::vector<BuiltPlugin> &built,
   ignoreUnused(audioUnit);
 #endif
   return installed;
+}
+
+// Visible copy of the finished plugins in Documents, so users can always see
+// that the files exist and can pass them on. Music programs use the installed
+// copies, not these.
+inline File pluginCopyFolder(const Document &d) {
+  return File::getSpecialLocation(File::userDocumentsDirectory)
+      .getChildFile("Artilody Plugweaver")
+      .getChildFile("Plugins")
+      .getChildFile(d.name);
+}
+inline String formatLabel(const String &format) {
+  return format == "au" ? "AU" : format.toUpperCase();
+}
+inline File savePluginCopies(const Document &d,
+                             const std::vector<BuiltPlugin> &built,
+                             const Log &log = {}) {
+  auto folder = pluginCopyFolder(d);
+  require(folder.createDirectory().wasOk(),
+          "Cannot create " + folder.getFullPathName());
+  // Remove copies of formats that are no longer built.
+  for (auto old : folder.findChildFiles(File::findFilesAndDirectories, false))
+    if (old.hasFileExtension("vst3;component;clap"))
+      old.deleteRecursively();
+  String text = d.name + " - built with Artilody Plugweaver " +
+                Time::getCurrentTime().formatted("%Y-%m-%d %H:%M") +
+                "\n\nThese are copies of the finished plugins. Plugweaver has "
+                "already installed them for your music programs here:\n\n";
+  for (const auto &b : built) {
+    copyPlugin(b.file, folder.getChildFile(b.file.getFileName()), log);
+    text << formatLabel(b.format) << ": "
+         << pluginInstallRoot()
+                .getChildFile(pluginFolderName(b.format))
+                .getChildFile(b.file.getFileName())
+                .getFullPathName()
+         << "\n";
+  }
+  text << "\nTo use the instrument on another computer, copy a plugin into "
+          "the same folder there.";
+#if JUCE_MAC
+  text << "\nOn a Mac, the Library folder (Bibliotek) is hidden in Finder: "
+          "choose Go > Go to Folder... and paste the folder path.";
+#endif
+  text << "\n";
+  folder.getChildFile("Read me.txt").replaceWithText(text);
+  if (log)
+    log("Copy saved: " + folder.getFullPathName() + "\n");
+  return folder;
 }
 } // namespace pw
