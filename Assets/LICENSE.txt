@@ -1,0 +1,6 @@
+logo.png and icon.png contain the Artilody logo. The logo belongs to Artilody and is
+not covered by the GPL-3.0 licence of the source code. Forks must replace it with
+their own artwork.
+
+This does not cover images, logos, fonts or samples subsequently imported by users.
+Source code is licensed under GPL-3.0-only; see ../LICENSE.
