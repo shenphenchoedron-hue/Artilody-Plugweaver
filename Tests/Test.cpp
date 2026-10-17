@@ -126,9 +126,9 @@ int main(int argc, char **argv) {
       assert(engineIn.openedOk());
       auto stage = root.getChildFile("plugins").getChildFile(
           String::toHexString(name.hashCode()));
-      auto built = pw::createPlugins(doc, true, JUCE_MAC != 0, true, engineIn,
+      auto built = pw::createPlugins(doc, true, pw::hasAudioUnits, true, engineIn,
                                      stage);
-      assert(built.size() == (JUCE_MAC ? 3u : 2u));
+      assert(built.size() == (pw::hasAudioUnits ? 3u : 2u));
       File vst3File, clapFile;
       for (auto &b : built) {
         assert(b.file.exists() && b.file.getFileNameWithoutExtension() == name);

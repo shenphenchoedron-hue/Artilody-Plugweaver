@@ -162,6 +162,12 @@ using Log = std::function<void(const String &)>;
 std::unique_ptr<InputStream> openEngineArchive();
 
 inline const String engineName = "Plugweaver Engine";
+// Audio Units exist only on macOS.
+#if JUCE_MAC
+inline constexpr bool hasAudioUnits = true;
+#else
+inline constexpr bool hasAudioUnits = false;
+#endif
 
 struct BuiltPlugin {
   String format; // "vst3", "au" or "clap"

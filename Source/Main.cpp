@@ -2159,7 +2159,7 @@ public:
       d.name = "Plugweaver Export Test";
       auto engine = pw::openEngineArchive();
       pw::require(engine != nullptr, "Built-in engine not found");
-      auto built = pw::createPlugins(d, true, JUCE_MAC != 0, true, *engine,
+      auto built = pw::createPlugins(d, true, pw::hasAudioUnits, true, *engine,
                                      folder.getChildFile("plugins"));
       for (auto &b : built)
         result << b.format << ": " << b.file.getFullPathName() << "\n";
