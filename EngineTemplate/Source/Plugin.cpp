@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+#if PW_PREBUILT_ENGINE
+// Prebuilt engine: identity and instrument data come from the payload that
+// Plugweaver attaches when it exports an instrument (see PwPayload.h).
+#include "PwIdentity.h"
+#else
+// Exported source project: the instrument is compiled into the plugin.
 #include "InstrumentData.h"
+#endif
 #include "InstrumentView.h"
 using namespace juce;
 class InstrumentProcessor final : public AudioProcessor {
@@ -31,10 +38,19 @@ public:
       : AudioProcessor(BusesProperties().withOutput(
             "Output", AudioChannelSet::stereo(), true)),
         state(*this, nullptr, "PARAMETERS", layout()) {
-    MemoryInputStream in(
-        InstrumentData::instrument_zip,
-        static_cast<std::size_t>(InstrumentData::instrument_zipSize), false);
     try {
+#if PW_PREBUILT_ENGINE
+      auto payload = pw_id::payload();
+      pw::require(*payload.path != 0,
+                  "This is the Plugweaver engine without an instrument. "
+                  "Build the instrument in Artilody Plugweaver.");
+      SubregionStream in(new FileInputStream(File(String::fromUTF8(payload.path))),
+                         int64(payload.offset), int64(payload.size), true);
+#else
+      MemoryInputStream in(
+          InstrumentData::instrument_zip,
+          static_cast<std::size_t>(InstrumentData::instrument_zipSize), false);
+#endif
       document = pw::readDocument(in);
       engine.load(document);
       for (auto p : pw::parameters())
@@ -46,7 +62,9 @@ public:
     }
   }
   String loadError;
-  const String getName() const override { return JucePlugin_Name; }
+  const String getName() const override {
+    return String::fromUTF8(JucePlugin_Name);
+  }
   bool acceptsMidi() const override { return true; }
   bool producesMidi() const override { return false; }
   bool isMidiEffect() const override { return false; }

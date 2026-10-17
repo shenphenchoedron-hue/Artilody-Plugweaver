@@ -26,6 +26,9 @@ jobs:
           sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev \
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
             libxrender-dev libgl1-mesa-dev xvfb
+      - name: Version
+        shell: bash
+        run: echo "PW_VERSION=$(sed -nE 's/^project\(ArtilodyPlugweaver VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
       - name: Configure
         shell: bash
         run: |
@@ -34,8 +37,10 @@ jobs:
             Windows) cmake -S . -B build -A x64 -DBUILD_TESTING=ON ;;
             Linux)   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON ;;
           esac
-      - name: Build app
+      - name: Build app and plugin engine
         run: cmake --build build --config Release --parallel 4
+      # Includes building plugins from the engine and loading two of them side
+      # by side in a VST3 host.
       - name: Test
         shell: bash
         run: |
@@ -44,33 +49,86 @@ jobs:
           else
             ctest --test-dir build -C Release --output-on-failure
           fi
-      # Build the instrument exported by the self-test, so the plugin template is
-      # verified on every platform too.
-      - name: Build exported instrument
+      # Exported source projects (for developers) must keep building too.
+      - name: Build exported source project
         shell: bash
         run: |
           src="$(ls -d build/test-output/*-Source | head -1)"
-          echo "Exported source: $src"
           root="$PWD"
           extra=()
           if [ "$RUNNER_OS" = Windows ]; then root="$(pwd -W)"; extra=(-A x64); fi
           if [ "$RUNNER_OS" = macOS ]; then extra=(-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0); fi
-          cmake -S "$src" -B plugin-build -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="$root/build/_deps/juce-src" "${extra[@]}"
+          cmake -S "$src" -B plugin-build -DCMAKE_BUILD_TYPE=Release -DJUCE_PATH="$root/build/_deps/juce-src" \
+            -DCLAP_PATH="$root/build/_deps/clap_ext-src" "${extra[@]}"
           cmake --build plugin-build --config Release --parallel 4
-          cmake --install plugin-build --config Release --component Plugins --prefix "$root/plugin-install"
-          find plugin-install -maxdepth 2
-      - name: Package app
-        shell: bash
+      - name: Installer (macOS)
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist
+          packaging/mac/build-pkg.sh "build/Plugweaver_artefacts/Release/Artilody Plugweaver.app" "$PW_VERSION" \
+            "dist/Artilody-Plugweaver-$PW_VERSION-macOS.pkg"
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc /Qp "/DAppVersion=$env:PW_VERSION" "/DSourceExe=$PWD\build\Plugweaver_artefacts\Release\Artilody Plugweaver.exe" "/DOutputDir=$PWD\dist" packaging\windows\Plugweaver.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Installer (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          packaging/linux/build-deb.sh "build/Plugweaver_artefacts/Release/Artilody Plugweaver" "$PW_VERSION" \
+            "dist/artilody-plugweaver_${PW_VERSION}_amd64.deb"
+      # Install with the installer, then let the installed app build and install
+      # plugins with its built-in engine - exactly what a user does.
+      - name: Install and run (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo installer -pkg dist/*.pkg -target /
+          "/Applications/Artilody Plugweaver.app/Contents/MacOS/Artilody Plugweaver" --export-test "$RUNNER_TEMP/export-test" --install
+          cat "$RUNNER_TEMP/export-test/result.txt"
+          codesign --verify --deep --strict "$HOME/Library/Audio/Plug-Ins/Components/Plugweaver Export Test.component"
+          auval -v aumu "$(/usr/libexec/PlistBuddy -c 'Print :AudioComponents:0:subtype' "$HOME/Library/Audio/Plug-Ins/Components/Plugweaver Export Test.component/Contents/Info.plist")" Arti | tail -3
+      - name: Install and run (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\*-Setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/CURRENTUSER','/NORESTART' -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Artilody Plugweaver\Artilody Plugweaver.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Not installed: $exe"; exit 1 }
+          $p = Start-Process $exe -ArgumentList '--export-test',"$env:RUNNER_TEMP\export-test",'--install' -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\export-test\result.txt"
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Get-ChildItem -Recurse "$env:LOCALAPPDATA\Programs\Common" | Select-Object FullName
+          # No Visual C++ runtime DLLs needed by the app or the plugins.
+          $files = @($exe) + (Get-ChildItem -Recurse -File "$env:LOCALAPPDATA\Programs\Common" | ForEach-Object FullName)
+          foreach ($f in $files) {
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($f))
+            if ($text -match '(?i)(vcruntime140|msvcp140)[_0-9]*\.dll') { Write-Error "$f needs $($Matches[0])"; exit 1 }
+          }
+          Write-Host "No Visual C++ runtime dependency"
+      - name: Install and run (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          xvfb-run -a artilody-plugweaver --export-test "$RUNNER_TEMP/export-test" --install
+          cat "$RUNNER_TEMP/export-test/result.txt"
+          ls -la ~/.vst3 ~/.clap
+          ldd "build/Plugweaver_artefacts/Release/Artilody Plugweaver" | grep -E "stdc\+\+|gcc_s" && exit 1 || echo "No libstdc++/libgcc runtime dependency"
+      - name: Portable archive
+        shell: bash
+        run: |
           case "$RUNNER_OS" in
             macOS)
-              codesign --force --deep --sign - "build/Plugweaver_artefacts/Release/Artilody Plugweaver.app"
-              ditto -c -k --keepParent "build/Plugweaver_artefacts/Release/Artilody Plugweaver.app" "dist/Artilody-Plugweaver-macOS.zip" ;;
+              ditto -c -k --keepParent "build/Plugweaver_artefacts/Release/Artilody Plugweaver.app" "dist/Artilody-Plugweaver-$PW_VERSION-macOS-app.zip" ;;
             Windows)
-              7z a "dist/Artilody-Plugweaver-Windows.zip" "./build/Plugweaver_artefacts/Release/Artilody Plugweaver.exe" ;;
+              7z a "dist/Artilody-Plugweaver-$PW_VERSION-Windows-portable.zip" "./build/Plugweaver_artefacts/Release/Artilody Plugweaver.exe" ;;
             Linux)
-              tar -C build/Plugweaver_artefacts/Release -czf dist/Artilody-Plugweaver-Linux.tar.gz "Artilody Plugweaver" ;;
+              tar -C build/Plugweaver_artefacts/Release -czf "dist/Artilody-Plugweaver-$PW_VERSION-Linux.tar.gz" "Artilody Plugweaver" ;;
           esac
       - uses: actions/upload-artifact@v4
         with:

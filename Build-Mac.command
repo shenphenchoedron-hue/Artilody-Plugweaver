@@ -45,8 +45,8 @@ if [[ -z "$cmake_bin" ]]; then
   fi
 fi
 build_dir="$project_dir/build-mac"
-echo "Bygger Artilody Plugweaver baseline-01 — C++ / JUCE 7.0.12 / GPLv3."
-"$cmake_bin" -S "$project_dir" -B "$build_dir" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" -DBUILD_TESTING=ON
+echo "Bygger Artilody Plugweaver og plugin-motoren (Intel + Apple Silicon) — C++ / JUCE 7.0.12 / GPLv3."
+"$cmake_bin" -S "$project_dir" -B "$build_dir" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' -DBUILD_TESTING=ON
 "$cmake_bin" --build "$build_dir" --config Release --parallel 2
 "$(dirname "$cmake_bin")/ctest" --test-dir "$build_dir" -C Release --output-on-failure
 app_path="$build_dir/Plugweaver_artefacts/Release/Artilody Plugweaver.app"

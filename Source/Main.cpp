@@ -2,6 +2,7 @@
 #include "Exporter.h"
 #include "SfzImport.h"
 #include "Ui.h"
+#include <iostream>
 #include <thread>
 using namespace juce;
 using namespace ui;
@@ -52,8 +53,6 @@ class Main final : public AudioAppComponent,
   CriticalSection audioLock;
   MidiMessageCollector midiCollector;
   std::thread worker;
-  ChildProcess process;
-  std::atomic<bool> closing{false};
   bool busy = false, dirty = false;
   int tab = 1, selected = -1, zone = -1;
   std::unique_ptr<FileChooser> chooser;
@@ -702,6 +701,10 @@ class Main final : public AudioAppComponent,
   void choose(Action action) {
     if (busy)
       return;
+    if (action == Build) {
+      buildPlugins();
+      return;
+    }
     if (action == Open) {
       confirmDiscard([this] { chooseActual(Open); });
       return;
@@ -861,135 +864,74 @@ class Main final : public AudioAppComponent,
         });
         return;
       }
-      if (action == Export || action == Build)
-        exportOrBuild(action == Build, file);
+      if (action == Export)
+        writeSourceProject(file);
     } catch (const std::exception &e) {
       error(e.what());
     }
   }
-  void exportOrBuild(bool buildIt, File parent) {
+  // Builds the selected plugin formats from the engine built into Plugweaver
+  // and installs them. Nothing has to be installed on the user's machine.
+  void buildPlugins() {
+    auto snapshot = document;
+    bool v = vst3.getToggleState(), a = au.getToggleState(),
+         c = clap.getToggleState();
+    try {
+      pw::validateForExport(snapshot, v, a, c);
+    } catch (const std::exception &e) {
+      error(e.what());
+      return;
+    }
+    buildLog.clear();
+    tab = 3;
+    refresh(false);
+    message("Building plugin...");
+    run([this, snapshot, v, a, c] {
+      auto log = [this](const String &line) { appendLog(line); };
+      auto engineArchive = pw::openEngineArchive();
+      pw::require(engineArchive != nullptr,
+                  "The built-in plugin engine is missing. Reinstall "
+                  "Artilody Plugweaver.");
+      auto stage = File::getSpecialLocation(File::tempDirectory)
+                       .getChildFile("Plugweaver-build")
+                       .getChildFile(Uuid().toDashedString());
+      appendLog("Building " + snapshot.name + "...\n");
+      auto built =
+          pw::createPlugins(snapshot, v, a, c, *engineArchive, stage, log);
+      std::vector<File> installed;
+      try {
+        installed = pw::installPlugins(built, log);
+      } catch (...) {
+        stage.deleteRecursively();
+        throw;
+      }
+      stage.deleteRecursively();
+      return [this, installed] {
+        message("Plugin installed - quit and reopen your DAW, then rescan "
+                "plugins");
+        appendLog("\nDone. Restart your DAW and rescan plugins.\n");
+        if (!installed.empty())
+          installed.front().revealToUser();
+      };
+    });
+  }
+  // Writes a complete C++/CMake project for developers. Building it needs a
+  // compiler and CMake; Build plugin does not.
+  void writeSourceProject(File parent) {
     auto snapshot = document;
     bool v = vst3.getToggleState(), a = au.getToggleState(),
          c = clap.getToggleState();
     buildLog.clear();
     tab = 3;
     refresh(false);
-    message(buildIt ? "Building plugin - the first build downloads JUCE and "
-                      "CLAP and can take several minutes..."
-                    : "Exporting source project...");
-    run([this, snapshot, parent, v, a, c, buildIt] {
+    message("Exporting source project...");
+    run([this, snapshot, parent, v, a, c] {
       auto dir = pw::exportInstrument(snapshot, parent, v, a, c);
-      appendLog("Source project: " + dir.getFullPathName() + "\n");
-      if (buildIt) {
-        File cmake = pw::findCMake();
-        pw::require(cmake.existsAsFile(),
-                    "CMake was not found. Install CMake 3.24 or newer, or run "
-                    "the build script inside the exported source folder: " +
-                        dir.getFullPathName());
-        String log;
-        auto logFile = dir.getChildFile("build.log");
-        auto command = [&](StringArray args, bool mustSucceed = true) {
-          pw::require(!closing, "Build cancelled");
-          String line = "\n$ " + args.joinIntoString(" ") + "\n";
-          log += line;
-          appendLog(line);
-          pw::require(process.start(args, ChildProcess::wantStdOut |
-                                              ChildProcess::wantStdErr),
-                      "Could not start " + args[0]);
-          // readProcessOutput blocks until its buffer is full, so read small
-          // pieces to keep the log live. Bytes of an incomplete UTF-8
-          // character are kept until the rest arrives.
-          char buffer[128];
-          std::string pending;
-          auto flush = [&](bool all) {
-            size_t end = pending.size();
-            if (!all)
-              for (size_t back = 1; back <= std::min<size_t>(3, pending.size());
-                   ++back) {
-                auto byte = static_cast<unsigned char>(pending[end - back]);
-                if ((byte & 0xc0) == 0x80)
-                  continue; // continuation byte
-                size_t need = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3
-                              : byte >= 0xc0 ? 2 : 1;
-                if (need > back)
-                  end -= back; // sequence not complete yet
-                break;
-              }
-            if (end == 0)
-              return;
-            String chunk = String::fromUTF8(pending.data(), int(end));
-            pending.erase(0, end);
-            log += chunk;
-            appendLog(chunk);
-          };
-          for (;;) {
-            int n = process.readProcessOutput(buffer, sizeof(buffer));
-            if (n > 0) {
-              pending.append(buffer, size_t(n));
-              flush(false);
-            } else if (!process.isRunning())
-              break;
-            else
-              Thread::sleep(20);
-            if (closing) {
-              process.kill();
-              break;
-            }
-          }
-          flush(true);
-          logFile.replaceWithText(log);
-          bool ok = process.getExitCode() == 0;
-          pw::require(!mustSucceed || ok,
-                      "Build failed. Source and build.log are in: " +
-                          dir.getFullPathName());
-          return ok;
-        };
-        StringArray configure{cmake.getFullPathName(), "-S",
-                              dir.getFullPathName(), "-B",
-                              dir.getChildFile("build").getFullPathName(),
-                              "-DCMAKE_BUILD_TYPE=Release"};
-#if JUCE_MAC
-        configure.addArray({"-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
-                            "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"});
-#endif
-        command(configure);
-        command({cmake.getFullPathName(), "--build",
-                 dir.getChildFile("build").getFullPathName(), "--config",
-                 "Release", "--parallel",
-                 String(jmax(2, SystemStats::getNumCpus()))});
-#if JUCE_MAC
-        for (auto bundle : dir.getChildFile("build/Instrument_artefacts/Release")
-                               .findChildFiles(File::findDirectories, true))
-          if (bundle.hasFileExtension("vst3;component;clap;app")) {
-            command({"/usr/bin/xattr", "-cr", bundle.getFullPathName()},
-                    false);
-            command({"/usr/bin/codesign", "--force", "--deep", "--sign", "-",
-                     bundle.getFullPathName()});
-            command({"/usr/bin/codesign", "--verify", "--deep", "--strict",
-                     bundle.getFullPathName()});
-          }
-#endif
-        // The install step removes older copies before copying, so no stale
-        // files break the bundle signature.
-        command({cmake.getFullPathName(), "--install",
-                 dir.getChildFile("build").getFullPathName(), "--config",
-                 "Release", "--component", "Plugins", "--prefix",
-                 pw::pluginInstallRoot().getFullPathName()});
-#if JUCE_MAC
-        // Make macOS re-read its Audio Unit list so hosts see the new AU.
-        if (a)
-          command({"/usr/bin/killall", "-9", "AudioComponentRegistrar"},
-                  false);
-#endif
-      }
-      return [this, dir, buildIt] {
-        message(buildIt ? "Plugin installed - quit and reopen your DAW, then "
-                          "rescan plugins"
-                        : "Source project exported");
-        appendLog(String("\n") +
-                  (buildIt ? "Done. Installed plugin files are listed above. "
-                             "Restart your DAW and rescan plugins.\n"
-                           : "Done.\n"));
+      appendLog("Source project: " + dir.getFullPathName() +
+                "\nBuild it with the build script for your system "
+                "(needs a C++ compiler and CMake).\n");
+      return [this, dir] {
+        message("Source project exported");
         dir.revealToUser();
       };
     });
@@ -1085,8 +1027,8 @@ public:
     buildLog.setJustification(Justification::topLeft);
     buildLog.setIndents(12, 10);
     buildLog.setTextToShowWhenEmpty(
-        "Build output appears here. The first build downloads JUCE and CLAP "
-        "and can take several minutes.",
+        "Build output appears here. Build plugin creates and installs the "
+        "selected formats in a few seconds - no other software is needed.",
         col::dim);
     buildLog.setReadOnly(true);
     buildLog.setScrollbarsShown(true);
@@ -1236,9 +1178,12 @@ public:
     };
     exportSource.onClick = [this] { choose(Export); };
     openPlugins.onClick = [] {
-      File::getSpecialLocation(File::userHomeDirectory)
-          .getChildFile("Library/Audio/Plug-Ins")
-          .revealToUser();
+      auto root = pw::pluginInstallRoot();
+#if JUCE_LINUX || JUCE_BSD
+      root = root.getChildFile(".vst3");
+#endif
+      root.createDirectory();
+      root.revealToUser();
     };
     import.onClick = [this] { choose(Import); };
     chooseBackground.onClick = [this] { choose(Background); };
@@ -1471,8 +1416,6 @@ public:
   }
   ~Main() override {
     stopTimer();
-    closing = true;
-    process.kill();
     if (worker.joinable())
       worker.join();
     deviceManager.removeMidiInputDeviceCallback({}, &midiCollector);
@@ -2169,10 +2112,71 @@ class PlugweaverApp final : public JUCEApplication {
 
 public:
   const String getApplicationName() override { return "Artilody Plugweaver"; }
-  const String getApplicationVersion() override { return "0.2.0"; }
+  const String getApplicationVersion() override {
+    return PW_APP_VERSION;
+  }
   bool moreThanOneInstanceAllowed() override { return false; }
-  void initialise(const String &) override {
+  void initialise(const String &commandLine) override {
+    auto args = StringArray::fromTokens(commandLine, true);
+    args.trim();
+    for (auto &a : args)
+      a = a.unquoted();
+    int i = args.indexOf("--export-test");
+    if (i >= 0) {
+      setApplicationReturnValue(
+          exportTest(File(args[i + 1]), args.contains("--install")) ? 0 : 1);
+      quit();
+      return;
+    }
     window = std::make_unique<Window>();
+  }
+  // Release check without UI: builds plugins from a generated instrument with
+  // the engine embedded in this app (and installs them with --install), and
+  // writes the result to result.txt.
+  static bool exportTest(const File &folder, bool install) {
+    String result;
+    bool ok = false;
+    try {
+      pw::require(File::isAbsolutePath(folder.getFullPathName()) &&
+                      folder.createDirectory().wasOk(),
+                  "Usage: --export-test <absolute folder>");
+      auto wav = folder.getChildFile("tone.wav");
+      {
+        wav.deleteFile();
+        WavAudioFormat format;
+        std::unique_ptr<AudioFormatWriter> writer(format.createWriterFor(
+            wav.createOutputStream().release(), 44100, 1, 16, {}, 0));
+        pw::require(writer != nullptr, "Cannot write test sample");
+        AudioBuffer<float> audio(1, 22050);
+        for (int n = 0; n < audio.getNumSamples(); ++n)
+          audio.setSample(0, n, .2f * std::sin(float(n) * .02f));
+        writer->writeFromAudioSampleBuffer(audio, 0, audio.getNumSamples());
+      }
+      auto sfz = folder.getChildFile("Test.sfz");
+      sfz.replaceWithText("<region> key=60 sample=tone.wav\n");
+      pw::Document d;
+      pw::importSfz(d, sfz);
+      d.name = "Plugweaver Export Test";
+      auto engine = pw::openEngineArchive();
+      pw::require(engine != nullptr, "Built-in engine not found");
+      auto built = pw::createPlugins(d, true, JUCE_MAC != 0, true, *engine,
+                                     folder.getChildFile("plugins"));
+      for (auto &b : built)
+        result << b.format << ": " << b.file.getFullPathName() << "\n";
+      ok = !built.empty();
+      if (install)
+        for (auto &file : pw::installPlugins(built)) {
+          pw::require(file.exists(), "Not installed: " + file.getFullPathName());
+          result << "installed: " << file.getFullPathName() << "\n";
+        }
+    } catch (const std::exception &e) {
+      result << "FAILED: " << e.what() << "\n";
+    }
+    if (folder.isDirectory())
+      folder.getChildFile("result.txt")
+          .replaceWithText((ok ? "OK\n" : "") + result);
+    std::cout << result << std::flush;
+    return ok;
   }
   void shutdown() override { window.reset(); }
   void systemRequestedQuit() override {

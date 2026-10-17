@@ -8,7 +8,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Bygger Artilody Plugweaver - C++ / JUCE 7.0.12 / GPLv3.
+where git >nul 2>nul
+if errorlevel 1 (
+  echo Git mangler. Installer Git fra https://git-scm.com/download/win
+  pause
+  exit /b 1
+)
+echo Bygger Artilody Plugweaver og plugin-motoren - C++ / JUCE 7.0.12 / GPLv3.
 cmake -S . -B build-windows -A x64 -DBUILD_TESTING=ON || goto failed
 cmake --build build-windows --config Release --parallel || goto failed
 ctest --test-dir build-windows -C Release --output-on-failure || goto failed

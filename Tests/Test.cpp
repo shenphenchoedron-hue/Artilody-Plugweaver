@@ -108,9 +108,96 @@ int main(int argc, char **argv) {
     assert(pw::pluginFolderName("vst3").isNotEmpty() &&
            pw::pluginExtension("au") == ".component" &&
            pw::pluginInstallRoot().getFullPathName().isNotEmpty());
+    // Plugins built from the prebuilt engine: two instruments loaded side by
+    // side must keep their own name, maker, id and sound.
+    ScopedJuceInitialiser_GUI gui;
+    const File engineZip(PW_ENGINE_ZIP);
+    assert(engineZip.existsAsFile());
+    struct Loaded {
+      std::unique_ptr<AudioPluginInstance> plugin;
+      int uid = 0;
+    };
+    auto buildAndLoad = [&](const String &name, const String &maker) {
+      auto doc = restored;
+      doc.name = name;
+      doc.maker = maker;
+      doc.uuid = Uuid().toString();
+      FileInputStream engineIn(engineZip);
+      assert(engineIn.openedOk());
+      auto stage = root.getChildFile("plugins").getChildFile(
+          String::toHexString(name.hashCode()));
+      auto built = pw::createPlugins(doc, true, JUCE_MAC != 0, true, engineIn,
+                                     stage);
+      assert(built.size() == (JUCE_MAC ? 3u : 2u));
+      File vst3File, clapFile;
+      for (auto &b : built) {
+        assert(b.file.exists() && b.file.getFileNameWithoutExtension() == name);
+        if (b.format == "vst3")
+          vst3File = b.file;
+        if (b.format == "clap")
+          clapFile = b.file;
+      }
+#if !JUCE_MAC
+      // Single-file CLAP: identity is appended to the binary.
+      MemoryBlock tail;
+      {
+        FileInputStream in(clapFile);
+        in.setPosition(in.getTotalLength() - pw_payload::trailerSize);
+        in.readIntoMemoryBlock(tail, pw_payload::trailerSize);
+        pw_payload::Trailer t;
+        assert(pw_payload::parseTrailer(
+            static_cast<const unsigned char *>(tail.getData()),
+            std::uint64_t(in.getTotalLength()), t));
+      }
+#else
+      assert(clapFile.getChildFile("Contents/Resources/instrument.pwi")
+                 .existsAsFile());
+#endif
+      VST3PluginFormat format;
+      OwnedArray<PluginDescription> types;
+      format.findAllTypesForFile(types, vst3File.getFullPathName());
+      assert(types.size() == 1);
+      std::cout << "VST3: " << types[0]->name << " / "
+                << types[0]->manufacturerName << " / "
+                << String::toHexString(types[0]->uniqueId) << "\n";
+      assert(types[0]->name == name && types[0]->manufacturerName == maker &&
+             types[0]->isInstrument);
+      String error;
+      Loaded loaded;
+      loaded.plugin =
+          format.createInstanceFromDescription(*types[0], 44100, 512, error);
+      assert(loaded.plugin != nullptr);
+      loaded.uid = types[0]->uniqueId;
+      return loaded;
+    };
+    auto first = buildAndLoad("PW Test A", "Maker A");
+    auto second = buildAndLoad(CharPointer_UTF8("PW Test \xc3\x98 Flygel"),
+                               CharPointer_UTF8("M\xc3\xa6rke B"));
+    assert(first.uid != second.uid);
+    for (auto *loaded : {&first, &second}) {
+      auto &plugin = *loaded->plugin;
+      plugin.enableAllBuses();
+      plugin.prepareToPlay(44100, 512);
+      AudioBuffer<float> pluginOut(2, 512);
+      float rms = 0;
+      for (int block = 0; block < 4 && rms < .001f; ++block) {
+        pluginOut.clear();
+        MidiBuffer notes;
+        if (block == 0)
+          notes.addEvent(MidiMessage::noteOn(1, 36, juce::uint8(100)), 0);
+        plugin.processBlock(pluginOut, notes);
+        rms = std::max(rms, pluginOut.getRMSLevel(0, 0, 512));
+      }
+      std::cout << "Sound from " << plugin.getName() << ": rms " << rms << "\n";
+      assert(rms > .001f);
+      plugin.releaseResources();
+    }
+    first.plugin.reset();
+    second.plugin.reset();
     std::cout
         << "PASS: SFZ, coverage gaps, audio, project roundtrip, asset-only "
-           "template, unsafe/unsupported input rejection, source export\n"
+           "template, unsafe/unsupported input rejection, source export, "
+           "prebuilt engine plugins (identity, side by side, sound)\n"
         << "Exported: " << exported.getFullPathName() << "\n";
     return 0;
   } catch (const std::exception &e) {

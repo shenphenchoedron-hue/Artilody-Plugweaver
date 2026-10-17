@@ -15,14 +15,17 @@ Use only samples and images whose terms allow your intended distribution. No pro
 This does not require a paid JUCE licence, subscription, Apple Developer membership or cloud build service.
 The software is not Apple-notarized; ad-hoc signing on your own Mac is supported.
 
-On Mac, Plugweaver's Build plugin button and Build-Mac.command build universal Intel/Apple Silicon
-plugins, sign them locally, and install the selected formats into your user's standard plugin folders:
+Plugweaver's Build plugin button does not need this project: it builds the same plugin from its
+built-in engine without a compiler. This project is for developers who want to change the code.
+
+On Mac, Build-Mac.command builds universal Intel/Apple Silicon plugins, signs them locally and
+installs the selected formats into your user's standard plugin folders:
 
 - VST3: `~/Library/Audio/Plug-Ins/VST3/`
 - AU: `~/Library/Audio/Plug-Ins/Components/`
 - CLAP: `~/Library/Audio/Plug-Ins/CLAP/`
 
-On Windows and Linux the build scripts and the Build plugin button install into the per-user folders:
+On Windows and Linux the build scripts install into the per-user folders:
 
 - Windows: `%LOCALAPPDATA%\Programs\Common\VST3\` and `...\CLAP\`
 - Linux: `~/.vst3/` and `~/.clap/`
